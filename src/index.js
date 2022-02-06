@@ -199,6 +199,7 @@ app.post('/start', (req, res) => {
   wallet.start().then((info) => {
     console.log(`Wallet started with wallet id ${req.body['wallet-id']}. Full-node info: `, info);
     wallets[req.body['wallet-id']] = wallet;
+    console.log(walletConfig.tokenUid);
     res.send({
       success: true,
     });
@@ -282,8 +283,10 @@ walletRouter.get(
     return res.status(400).json(validationResult);
   }
   const wallet = req.wallet;
+
   // Expects token uid
-  const token = req.query.token || hathorLibConstants.HATHOR_TOKEN_CONFIG.uid;
+  const token = req.query.token || wallet.tokenUid || hathorLibConstants.HATHOR_TOKEN_CONFIG.uid;
+
   const balanceObj = await wallet.getBalance(token);
   res.send({ available: balanceObj[0].balance.unlocked, locked: balanceObj[0].balance.locked });
 });
@@ -475,7 +478,7 @@ walletRouter.post('/simple-send-tx',
   const wallet = req.wallet;
   const address = req.body.address;
   const value = req.body.value;
-  const token = req.body.token;
+  const token = req.body.token || wallet.tokenUid;
   let token_id;
   if (token) {
     if (typeof token === 'string') {
@@ -689,7 +692,7 @@ walletRouter.post('/send-tx',
     // otherwise we try to get from old parameter in token object
     // if none exist we use default as HTR
     if (!output.token) {
-      const tokenObj = req.body.token || hathorLibConstants.HATHOR_TOKEN_CONFIG;
+      const tokenObj = req.body.token || wallet.tokenUid || hathorLibConstants.HATHOR_TOKEN_CONFIG;
       output.token = tokenObj.uid;
     }
   }
@@ -804,7 +807,7 @@ walletRouter.post('/mint-tokens',
   }
 
   const wallet = req.wallet;
-  const token = req.body.token;
+  const token = req.body.token || wallet.tokenUid;
   const amount = req.body.amount;
   const address = req.body.address || null;
   const changeAddress = req.body.change_address || null;
@@ -840,7 +843,7 @@ walletRouter.post('/melt-tokens',
   }
 
   const wallet = req.wallet;
-  const token = req.body.token;
+  const token = req.body.token || wallet.tokenUid;
   const amount = req.body.amount;
   const changeAddress = req.body.change_address || null;
   const depositAddress = req.body.deposit_address || null;
