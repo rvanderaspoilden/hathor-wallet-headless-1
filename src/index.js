@@ -7,15 +7,27 @@
 
 import express from 'express';
 import morgan from 'morgan';
-import { Connection, HathorWallet, wallet as oldWalletUtils, walletUtils, tokens, errors, constants as hathorLibConstants, config as hathorLibConfig } from '@hathor/wallet-lib';
-import { body, checkSchema, matchedData, query, validationResult } from 'express-validator';
+import {
+    config as hathorLibConfig,
+    Connection,
+    constants as hathorLibConstants,
+    errors,
+    HathorWallet,
+    tokens,
+    wallet as oldWalletUtils,
+    walletUtils
+} from '@hathor/wallet-lib';
+import {body, checkSchema, matchedData, query, validationResult} from 'express-validator';
 
 import config from './config';
 import apiDocs from './api-docs';
 import apiKeyAuth from './api-key-auth';
 import logger from './logger';
 import version from './version';
-import { lock, lockTypes } from './lock';
+import {lock, lockTypes} from './lock';
+
+import cors from 'cors';
+import {re} from "@babel/core/lib/vendor/import-meta-resolve";
 
 /**
  * The endpoints that return a created tx must keep compatibility
@@ -24,21 +36,21 @@ import { lock, lockTypes } from './lock';
  * Outputs: 'token_data' now is 'tokenData'
  */
 const mapTxReturn = (tx) => {
-  for (const input of tx.inputs) {
-    input['tx_id'] = input['hash'];
-  }
+    for (const input of tx.inputs) {
+        input['tx_id'] = input['hash'];
+    }
 
-  for (const output of tx.outputs) {
-    output['token_data'] = output['tokenData'];
-  }
+    for (const output of tx.outputs) {
+        output['token_data'] = output['tokenData'];
+    }
 
-  return tx;
+    return tx;
 }
 
 const initHathorLib = () => {
-  if (config['txMiningUrl']) {
-    hathorLibConfig.setTxMiningUrl(config['txMiningUrl']);
-  }
+    if (config['txMiningUrl']) {
+        hathorLibConfig.setTxMiningUrl(config['txMiningUrl']);
+    }
 }
 
 initHathorLib();
@@ -52,39 +64,42 @@ const allowPassphrase = config.allowPassphrase || false;
 const wallets = {};
 
 const humanState = {
-  [HathorWallet.CLOSED]: 'Closed',
-  [HathorWallet.CONNECTING]: 'Connecting',
-  [HathorWallet.SYNCING]: 'Syncing',
-  [HathorWallet.READY]: 'Ready',
-  [HathorWallet.ERROR]: 'Error',
+    [HathorWallet.CLOSED]: 'Closed',
+    [HathorWallet.CONNECTING]: 'Connecting',
+    [HathorWallet.SYNCING]: 'Syncing',
+    [HathorWallet.READY]: 'Ready',
+    [HathorWallet.ERROR]: 'Error',
 };
 
 const app = express();
+app.use(cors({
+    origin: '*'
+}));
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(morgan(config.httpLogFormat || 'combined', { stream: logger.stream }));
+app.use(express.urlencoded({extended: true}));
+app.use(morgan(config.httpLogFormat || 'combined', {stream: logger.stream}));
 if (config.http_api_key) {
-  app.use(apiKeyAuth(config.http_api_key));
+    app.use(apiKeyAuth(config.http_api_key));
 }
 const walletRouter = express.Router({mergeParams: true})
 
 const parametersValidation = (req) => {
-  // Parameters validation
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return {success: false, error: errors.array()};
-  } else {
-    return {success: true};
-  }
+    // Parameters validation
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return {success: false, error: errors.array()};
+    } else {
+        return {success: true};
+    }
 
 }
 
 app.get('/', (req, res) => {
-  res.send('<html><body><h1>Welcome to Hathor Wallet API!</h1><p>See the <a href="docs/">docs</a></p></body></html>');
+    res.send('<html><body><h1>Welcome to Hathor Wallet API!</h1><p>See the <a href="docs/">docs</a></p></body></html>');
 });
 
 app.get('/docs', (req, res) => {
-  res.send(apiDocs);
+    res.send(apiDocs);
 });
 
 /**
@@ -92,167 +107,171 @@ app.get('/docs', (req, res) => {
  * For the docs, see api-docs.js
  */
 app.post('/start', (req, res) => {
-  // We expect the user to send the seed he wants to use
-  if (!('seedKey' in req.body) && !('seed' in req.body)) {
-    res.send({
-      success: false,
-      message: 'Parameter \'seedKey\' or \'seed\' is required.',
-    });
-    return;
-  }
-
-  if (('seedKey' in req.body) && ('seed' in req.body)) {
-    res.send({
-      success: false,
-      message: 'You can\'t have both \'seedKey\' and \'seed\' in the body.',
-    });
-    return;
-  }
-
-  let seed;
-  if ('seedKey' in req.body) {
-    const seedKey = req.body.seedKey;
-    if (!(seedKey in config.seeds)) {
-      res.send({
-        success: false,
-        message: 'Seed not found.',
-      });
-      return;
+    // We expect the user to send the seed he wants to use
+    if (!('seedKey' in req.body) && !('seed' in req.body)) {
+        res.send({
+            success: false,
+            message: 'Parameter \'seedKey\' or \'seed\' is required.',
+        });
+        return;
     }
 
-    seed = config.seeds[seedKey];
-  } else {
-    seed = req.body.seed;
-  }
+    if (('seedKey' in req.body) && ('seed' in req.body)) {
+        res.send({
+            success: false,
+            message: 'You can\'t have both \'seedKey\' and \'seed\' in the body.',
+        });
+        return;
+    }
 
-  // Seed validation
-  try {
-    const ret = walletUtils.wordsValid(seed);
-    seed = ret.words;
-  } catch (e) {
-    if (e instanceof errors.InvalidWords) {
-      res.send({
-        success: false,
-        message: `Invalid seed: ${e.message}`,
-      });
-      return;
+    let seed;
+    if ('seedKey' in req.body) {
+        const seedKey = req.body.seedKey;
+        if (!(seedKey in config.seeds)) {
+            res.send({
+                success: false,
+                message: 'Seed not found.',
+            });
+            return;
+        }
+
+        seed = config.seeds[seedKey];
     } else {
-      // Unhandled error
-      throw e;
+        seed = req.body.seed;
     }
-  }
 
-  // The user must send a key to index this wallet
-  if (!('wallet-id' in req.body)) {
-    res.send({
-      success: false,
-      message: 'Parameter \'wallet-id\' is required.',
-    });
-    return;
-  }
-
-  const connection = new Connection({network: config.network, servers: [config.server], connectionTimeout: config.connectionTimeout});
-  // Previous versions of the lib would have password and pin default as '123'
-  // We currently need something to be defined, otherwise we get an error when starting the wallet
-  const walletConfig = {
-    seed,
-    connection,
-    password: '123',
-    pinCode: '123',
-  }
-
-  // tokenUid is optionat but if not passed as parameter
-  // the wallet will use HTR
-  if (config.tokenUid) {
-    walletConfig['tokenUid'] = config.tokenUid;
-  }
-
-  // Passphrase is optional but if not passed as parameter
-  // the wallet will use empty string
-  if (req.body.passphrase) {
-    if (!allowPassphrase) {
-      // To use a passphrase on /start POST request the configuration of the headless must explicitly allow it
-      console.log('Failed to start wallet because using a passphrase is not allowed by the current config. See allowPassphrase.');
-      res.send({
-        success: false,
-        message: 'Failed to start wallet. To use a passphrase you must explicitly allow it in the configuration file. Using a passphrase completely changes the addresses of your wallet, only use it if you know what you are doing.',
-      });
-      return;
+    // Seed validation
+    try {
+        const ret = walletUtils.wordsValid(seed);
+        seed = ret.words;
+    } catch (e) {
+        if (e instanceof errors.InvalidWords) {
+            res.send({
+                success: false,
+                message: `Invalid seed: ${e.message}`,
+            });
+            return;
+        } else {
+            // Unhandled error
+            throw e;
+        }
     }
-    walletConfig['passphrase'] = req.body.passphrase;
-  }
-  const walletID = req.body['wallet-id'];
 
-  if (walletID in wallets) {
-    // We already have a wallet for this key
-    // so we log that it won't start a new one because
-    // it must first stop the old wallet and then start the new
-    console.log('Error starting wallet because this wallet-id is already in use. You must stop the wallet first.');
-    res.send({
-      success: false,
-      message: `Failed to start wallet with wallet id ${walletID}`,
-    });
-    return;
-  }
+    // The user must send a key to index this wallet
+    if (!('wallet-id' in req.body)) {
+        res.send({
+            success: false,
+            message: 'Parameter \'wallet-id\' is required.',
+        });
+        return;
+    }
 
-  const wallet = new HathorWallet(walletConfig);
-  wallet.start().then((info) => {
-    console.log(`Wallet started with wallet id ${req.body['wallet-id']}. Full-node info: `, info);
-    wallets[req.body['wallet-id']] = wallet;
-    console.log(walletConfig.tokenUid);
-    res.send({
-      success: true,
+    const connection = new Connection({
+        network: config.network,
+        servers: [config.server],
+        connectionTimeout: config.connectionTimeout
     });
-  }, (error) => {
-    console.log('Error:', error);
-    res.send({
-      success: false,
-      message: `Failed to start wallet with wallet id ${req.body['wallet-id']}`,
+    // Previous versions of the lib would have password and pin default as '123'
+    // We currently need something to be defined, otherwise we get an error when starting the wallet
+    const walletConfig = {
+        seed,
+        connection,
+        password: '123',
+        pinCode: '123',
+    }
+
+    // tokenUid is optionat but if not passed as parameter
+    // the wallet will use HTR
+    if (config.tokenUid) {
+        walletConfig['tokenUid'] = config.tokenUid;
+    }
+
+    // Passphrase is optional but if not passed as parameter
+    // the wallet will use empty string
+    if (req.body.passphrase) {
+        if (!allowPassphrase) {
+            // To use a passphrase on /start POST request the configuration of the headless must explicitly allow it
+            console.log('Failed to start wallet because using a passphrase is not allowed by the current config. See allowPassphrase.');
+            res.send({
+                success: false,
+                message: 'Failed to start wallet. To use a passphrase you must explicitly allow it in the configuration file. Using a passphrase completely changes the addresses of your wallet, only use it if you know what you are doing.',
+            });
+            return;
+        }
+        walletConfig['passphrase'] = req.body.passphrase;
+    }
+    const walletID = req.body['wallet-id'];
+
+    if (walletID in wallets) {
+        // We already have a wallet for this key
+        // so we log that it won't start a new one because
+        // it must first stop the old wallet and then start the new
+        console.log('Error starting wallet because this wallet-id is already in use. You must stop the wallet first.');
+        res.send({
+            success: false,
+            message: `Failed to start wallet with wallet id ${walletID}`,
+        });
+        return;
+    }
+
+    const wallet = new HathorWallet(walletConfig);
+    wallet.start().then((info) => {
+        console.log(`Wallet started with wallet id ${req.body['wallet-id']}. Full-node info: `, info);
+        wallets[req.body['wallet-id']] = wallet;
+        console.log(walletConfig.tokenUid);
+        res.send({
+            success: true,
+        });
+    }, (error) => {
+        console.log('Error:', error);
+        res.send({
+            success: false,
+            message: `Failed to start wallet with wallet id ${req.body['wallet-id']}`,
+        });
     });
-  });
 });
 
 walletRouter.use((req, res, next) => {
-  const sendError = (message, state) => {
-    res.send({
-      success: false,
-      message,
-      'statusCode': state,
-      'statusMessage': (state ? humanState[state] : ''),
-    });
-  }
-
-  // Get X-WALLET-ID header that defines which wallet the request refers to
-  if (!('x-wallet-id' in req.headers)) {
-    sendError('Header \'X-Wallet-Id\' is required.');
-    return;
-  }
-
-  const walletId = req.headers['x-wallet-id'];
-  if (!(walletId in wallets)) {
-    sendError('Invalid wallet id parameter.');
-    return;
-  }
-  const wallet = wallets[walletId];
-
-  if (config.confirmFirstAddress) {
-    const firstAddressHeader = req.headers['x-first-address'];
-    const firstAddress = wallet.getAddressAtIndex(0);
-    if (firstAddress !== firstAddressHeader) {
-      sendError(`Wrong first address. This wallet's first address is: ${firstAddress}`);
-      return;
+    const sendError = (message, state) => {
+        res.send({
+            success: false,
+            message,
+            'statusCode': state,
+            'statusMessage': (state ? humanState[state] : ''),
+        });
     }
-  }
 
-  if (!wallet.isReady()) {
-    sendError('Wallet is not ready.', wallet.state);
-    return;
-  }
+    // Get X-WALLET-ID header that defines which wallet the request refers to
+    if (!('x-wallet-id' in req.headers)) {
+        sendError('Header \'X-Wallet-Id\' is required.');
+        return;
+    }
 
-  // Adding to req parameter, so we don't need to get it in all requests
-  req.wallet = wallet;
-  req.walletId = walletId;
-  next();
+    const walletId = req.headers['x-wallet-id'];
+    if (!(walletId in wallets)) {
+        sendError('Invalid wallet id parameter.');
+        return;
+    }
+    const wallet = wallets[walletId];
+
+    if (config.confirmFirstAddress) {
+        const firstAddressHeader = req.headers['x-first-address'];
+        const firstAddress = wallet.getAddressAtIndex(0);
+        if (firstAddress !== firstAddressHeader) {
+            sendError(`Wrong first address. This wallet's first address is: ${firstAddress}`);
+            return;
+        }
+    }
+
+    if (!wallet.isReady()) {
+        sendError('Wallet is not ready.', wallet.state);
+        return;
+    }
+
+    // Adding to req parameter, so we don't need to get it in all requests
+    req.wallet = wallet;
+    req.walletId = walletId;
+    next();
 });
 
 /**
@@ -260,14 +279,14 @@ walletRouter.use((req, res, next) => {
  * For the docs, see api-docs.js
  */
 walletRouter.get('/status', (req, res) => {
-  const wallet = req.wallet;
-  res.send({
-    'statusCode': wallet.state,
-    'statusMessage': humanState[wallet.state],
-    'network': wallet.getNetwork(),
-    'serverUrl': wallet.getServerUrl(),
-    'serverInfo': wallet.serverInfo,
-  });
+    const wallet = req.wallet;
+    res.send({
+        'statusCode': wallet.state,
+        'statusMessage': humanState[wallet.state],
+        'network': wallet.getNetwork(),
+        'serverUrl': wallet.getServerUrl(),
+        'serverInfo': wallet.serverInfo,
+    });
 });
 
 /**
@@ -275,68 +294,91 @@ walletRouter.get('/status', (req, res) => {
  * For the docs, see api-docs.js
  */
 walletRouter.get(
-  '/balance',
-  query('token').isString().optional(),
-  async (req, res) => {
-  const validationResult = parametersValidation(req);
-  if (!validationResult.success) {
-    return res.status(400).json(validationResult);
-  }
-  const wallet = req.wallet;
+    '/balance',
+    query('token').isString().optional(),
+    async (req, res) => {
+        const validationResult = parametersValidation(req);
+        if (!validationResult.success) {
+            return res.status(400).json(validationResult);
+        }
+        const wallet = req.wallet;
 
-  // Expects token uid
-  const token = req.query.token || wallet.tokenUid || hathorLibConstants.HATHOR_TOKEN_CONFIG.uid;
+        // Expects token uid
+        const token = req.query.token || wallet.tokenUid || hathorLibConstants.HATHOR_TOKEN_CONFIG.uid;
 
-  const balanceObj = await wallet.getBalance(token);
-  res.send({ available: balanceObj[0].balance.unlocked, locked: balanceObj[0].balance.locked });
-});
+        const balanceObj = await wallet.getBalance(token);
+        res.send({available: balanceObj[0].balance.unlocked, locked: balanceObj[0].balance.locked});
+    });
 
 /**
  * GET request to get an address of a wallet
  * For the docs, see api-docs.js
  */
 walletRouter.get('/address',
-  query('index').isInt({ min: 0 }).optional().toInt(),
-  query('mark_as_used').isBoolean().optional().toBoolean(),
-  (req, res) => {
-  const validationResult = parametersValidation(req);
-  if (!validationResult.success) {
-    return res.status(400).json(validationResult);
-  }
-  const wallet = req.wallet;
-  const index = req.query.index;
-  let address;
-  if (index !== undefined) {
-    // Because of isInt and toInt, it's safe to assume that index is now an integer >= 0
-    address = wallet.getAddressAtIndex(index);
-  } else {
-    const markAsUsed = req.query.mark_as_used || false;
-    const addressInfo = wallet.getCurrentAddress({markAsUsed});
-    address = addressInfo.address;
-  }
-  res.send({ address });
-});
+    query('index').isInt({min: 0}).optional().toInt(),
+    query('mark_as_used').isBoolean().optional().toBoolean(),
+    (req, res) => {
+        const validationResult = parametersValidation(req);
+        if (!validationResult.success) {
+            return res.status(400).json(validationResult);
+        }
+        const wallet = req.wallet;
+        const index = req.query.index;
+        let address;
+        if (index !== undefined) {
+            // Because of isInt and toInt, it's safe to assume that index is now an integer >= 0
+            address = wallet.getAddressAtIndex(index);
+        } else {
+            const markAsUsed = req.query.mark_as_used || false;
+            const addressInfo = wallet.getCurrentAddress({markAsUsed});
+            address = addressInfo.address;
+        }
+        res.send({address});
+    });
 
 /**
  * GET request to get an address index
  * For the docs, see api-docs.js
  */
 walletRouter.get('/address-index',
-  query('address').isString(),
-  (req, res) => {
-  const validationResult = parametersValidation(req);
-  if (!validationResult.success) {
-    return res.status(400).json(validationResult);
-  }
-  const wallet = req.wallet;
-  const address = req.query.address;
-  const index = wallet.getAddressIndex(address);
-  if (index === null) {
-    // Address does not belong to the wallet
-    res.send({ success: false });
-  } else {
-    res.send({ success: true, index });
-  }
+    query('address').isString(),
+    (req, res) => {
+        const validationResult = parametersValidation(req);
+        if (!validationResult.success) {
+            return res.status(400).json(validationResult);
+        }
+        const wallet = req.wallet;
+        const address = req.query.address;
+        const index = wallet.getAddressIndex(address);
+        if (index === null) {
+            // Address does not belong to the wallet
+            res.send({success: false});
+        } else {
+            res.send({success: true, index});
+        }
+    });
+
+/**
+ * GET request to get an address index
+ * For the docs, see api-docs.js
+ */
+walletRouter.get('/tokens', async (req, res) => {
+    const validationResult = parametersValidation(req);
+    if (!validationResult.success) {
+        return res.status(400).json(validationResult);
+    }
+    const wallet = req.wallet;
+    const tokensIds = await wallet.getTokens();
+
+    const tokens = [];
+
+    for (let i = 0; i < tokensIds.length; i++) {
+        const balanceObj = await wallet.getBalance(tokensIds[i]);
+
+        tokens.push({uid: tokensIds[i], balance: balanceObj[0].balance.unlocked});
+    }
+
+    res.send({success: true, tokens});
 });
 
 /**
@@ -344,21 +386,21 @@ walletRouter.get('/address-index',
  * For the docs, see api-docs.js
  */
 walletRouter.get('/addresses', async (req, res) => {
-  const wallet = req.wallet;
-  // TODO Add pagination
-  const addresses = [];
-  const iterator = wallet.getAllAddresses();
-  for (;;) {
-    const addressObj = await iterator.next();
-    const { value, done } = addressObj;
+    const wallet = req.wallet;
+    // TODO Add pagination
+    const addresses = [];
+    const iterator = wallet.getAllAddresses();
+    for (; ;) {
+        const addressObj = await iterator.next();
+        const {value, done} = addressObj;
 
-    if (done) {
-      break;
+        if (done) {
+            break;
+        }
+
+        addresses.push(value.address);
     }
-
-    addresses.push(value.address);
-  }
-  res.send({ addresses });
+    res.send({addresses});
 });
 
 /**
@@ -366,45 +408,45 @@ walletRouter.get('/addresses', async (req, res) => {
  * For the docs, see api-docs.js
  */
 walletRouter.get('/tx-history',
-  query('limit').isInt().optional().toInt(),
-  (req, res) => {
-  // TODO Add pagination
-  const validationResult = parametersValidation(req);
-  if (!validationResult.success) {
-    return res.status(400).json(validationResult);
-  }
-  const wallet = req.wallet;
-  const limit = req.query.limit || null;
-  const history = wallet.getFullHistory();
-  if (limit) {
-    const values = Object.values(history);
-    const sortedValues = values.sort((a, b) => b.timestamp - a.timestamp);
-    res.send(sortedValues.slice(0, limit));
-  } else {
-    res.send(Object.values(history));
-  }
-});
+    query('limit').isInt().optional().toInt(),
+    (req, res) => {
+        // TODO Add pagination
+        const validationResult = parametersValidation(req);
+        if (!validationResult.success) {
+            return res.status(400).json(validationResult);
+        }
+        const wallet = req.wallet;
+        const limit = req.query.limit || null;
+        const history = wallet.getFullHistory();
+        if (limit) {
+            const values = Object.values(history);
+            const sortedValues = values.sort((a, b) => b.timestamp - a.timestamp);
+            res.send(sortedValues.slice(0, limit));
+        } else {
+            res.send(Object.values(history));
+        }
+    });
 
 /**
  * GET request to get a transaction from the wallet
  * For the docs, see api-docs.js
  */
 walletRouter.get('/transaction',
-  query('id').isString(),
-  (req, res) => {
-  const validationResult = parametersValidation(req);
-  if (!validationResult.success) {
-    return res.status(400).json(validationResult);
-  }
-  const wallet = req.wallet;
-  const id = req.query.id;
-  const tx = wallet.getTx(id);
-  if (tx) {
-    res.send(tx);
-  } else {
-    res.send({success: false, error: `Wallet does not contain transaction with id ${id}`});
-  }
-});
+    query('id').isString(),
+    (req, res) => {
+        const validationResult = parametersValidation(req);
+        if (!validationResult.success) {
+            return res.status(400).json(validationResult);
+        }
+        const wallet = req.wallet;
+        const id = req.query.id;
+        const tx = wallet.getTx(id);
+        if (tx) {
+            res.send(tx);
+        } else {
+            res.send({success: false, error: `Wallet does not contain transaction with id ${id}`});
+        }
+    });
 
 /**
  * POST request to send a transaction with only one output
@@ -416,89 +458,140 @@ walletRouter.get('/transaction',
  * To achieve this validation we must create a custom validator.
  */
 walletRouter.post('/simple-send-tx',
-  checkSchema({
-    address: {
-      in: ['body'],
-      isString: true
-    },
-    value: {
-      in: ['body'],
-      isInt: {
-        options: {
-          min: 1
+    checkSchema({
+        address: {
+            in: ['body'],
+            isString: true
+        },
+        value: {
+            in: ['body'],
+            isInt: {
+                options: {
+                    min: 1
+                }
+            },
+            toInt: true
+        },
+        'change_address': {
+            in: ['body'],
+            isString: true,
+            optional: true
+        },
+        token: {
+            in: ['body'],
+            optional: true,
+            custom: {
+                options: (value, {req, location, path}) => {
+                    if (typeof value === 'string') {
+                        return true;
+                    } else if (typeof value === 'object') {
+                        if (!('name' in value) || !(typeof value.name === 'string')) {
+                            return false;
+                        }
+                        if (!('uid' in value) || !(typeof value.uid === 'string')) {
+                            return false;
+                        }
+                        if (!('symbol' in value) || !(typeof value.symbol === 'string')) {
+                            return false;
+                        }
+                        if (!value.name || !value.uid || !value.symbol) {
+                            return false;
+                        }
+                        return true;
+                    } else {
+                        return false;
+                    }
+                }
+            }
         }
-      },
-      toInt: true
-    },
-    'change_address': {
-      in: ['body'],
-      isString: true,
-      optional: true
-    },
-    token: {
-      in: ['body'],
-      optional: true,
-      custom: {
-        options: (value, { req, location, path }) => {
-          if (typeof value === 'string') {
-            return true;
-          } else if (typeof value === 'object') {
-            if (!('name' in value) || !(typeof value.name === 'string')) {
-              return false;
-            }
-            if (!('uid' in value) || !(typeof value.uid === 'string')) {
-              return false;
-            }
-            if (!('symbol' in value) || !(typeof value.symbol === 'string')) {
-              return false;
-            }
-            if (!value.name || !value.uid || !value.symbol) {
-              return false;
-            }
-            return true;
-          } else {
-            return false;
-          }
+    }),
+    async (req, res) => {
+        const validationResult = parametersValidation(req);
+        if (!validationResult.success) {
+            return res.status(400).json(validationResult);
         }
-      }
-    }
-  }),
-  async (req, res) => {
-  const validationResult = parametersValidation(req);
-  if (!validationResult.success) {
-    return res.status(400).json(validationResult);
-  }
 
-  const canStart = lock.lock(lockTypes.SEND_TX);
-  if (!canStart) {
-    res.send({success: false, error: cantSendTxErrorMessage});
-    return;
-  }
+        const canStart = lock.lock(lockTypes.SEND_TX);
+        if (!canStart) {
+            res.send({success: false, error: cantSendTxErrorMessage});
+            return;
+        }
 
-  const wallet = req.wallet;
-  const address = req.body.address;
-  const value = req.body.value;
-  const token = req.body.token || wallet.tokenUid;
-  let token_id;
-  if (token) {
-    if (typeof token === 'string') {
-      token_id = token;
-    } else {
-      token_id = token.uid;
-    }
-  } else {
-   token_id = hathorLibConstants.HATHOR_TOKEN_CONFIG.uid;
-  }
-  const changeAddress = req.body.change_address || null;
-  try {
-    const response = await wallet.sendTransaction(address, value, { token: token_id, changeAddress });
-    res.send({ success: true, ...mapTxReturn(response) });
-  } catch (err) {
-    res.send({success: false, error: err.message });
-  } finally {
-    lock.unlock(lockTypes.SEND_TX);
-  }
-});
+        const wallet = req.wallet;
+        const address = req.body.address;
+        const value = req.body.value;
+        const token = req.body.token || wallet.tokenUid;
+        let token_id;
+        if (token) {
+            if (typeof token === 'string') {
+                token_id = token;
+            } else {
+                token_id = token.uid;
+            }
+        } else {
+            token_id = hathorLibConstants.HATHOR_TOKEN_CONFIG.uid;
+        }
+        const changeAddress = req.body.change_address || null;
+        try {
+            const response = await wallet.sendTransaction(address, value, {token: token_id, changeAddress});
+            res.send({success: true, ...mapTxReturn(response)});
+        } catch (err) {
+            res.send({success: false, error: err.message});
+        } finally {
+            lock.unlock(lockTypes.SEND_TX);
+        }
+    });
+
+walletRouter.post('/loot',
+    checkSchema({
+        price: {
+            in: ['body'],
+            isInt: {
+                options: {
+                    min: 1
+                }
+            },
+            toInt: true
+        },
+        token: {
+            in: ['body'],
+            isString: true
+        }
+    }),
+    async (req, res) => {
+        const validationResult = parametersValidation(req);
+        if (!validationResult.success) {
+            return res.status(400).json(validationResult);
+        }
+
+        const canStart = lock.lock(lockTypes.SEND_TX);
+        if (!canStart) {
+            res.send({success: false, error: cantSendTxErrorMessage});
+            return;
+        }
+
+        const userWallet = req.wallet;
+        const userWalletAddress = userWallet.getAddressAtIndex(0);
+
+        const gameWallet = wallets[1];
+        const gameWalletAddress = gameWallet.getAddressAtIndex(0);
+
+        const price = req.body.price;
+        const token = req.body.token;
+        const gameToken = req.wallet.tokenUid;
+
+        try {
+            const payThePrice = await userWallet.sendTransaction(gameWalletAddress, price, {token: gameToken});
+            const giveTheToken = await gameWallet.sendTransaction(userWalletAddress, 1, {token: token});
+
+            res.send({success: true, payTx: {...mapTxReturn(payThePrice)}, lootTx: {...mapTxReturn(giveTheToken)}});
+        } catch (err) {
+            // Can't pay the bank
+            res.send({success: false, error: err.message});
+        } finally {
+            lock.unlock(lockTypes.SEND_TX);
+        }
+    });
 
 
 /**
@@ -524,46 +617,46 @@ walletRouter.post('/simple-send-tx',
  * @param {Object} options The options to filter the utxos (see utxo-filter API to see the possibilities)
  */
 const getUtxosToFillTx = (wallet, sumOutputs, options) => {
-  // We want to find only utxos to use in the tx, so we must filter by available only
-  options['only_available_utxos'] = true;
-  const utxosDetails = wallet.getUtxos(options);
-  // If I can't fill all the amount with the returned utxos, then return null
-  if (utxosDetails.total_amount_available < sumOutputs) {
-    return null;
-  }
+    // We want to find only utxos to use in the tx, so we must filter by available only
+    options['only_available_utxos'] = true;
+    const utxosDetails = wallet.getUtxos(options);
+    // If I can't fill all the amount with the returned utxos, then return null
+    if (utxosDetails.total_amount_available < sumOutputs) {
+        return null;
+    }
 
-  const utxos = utxosDetails.utxos;
-  // Sort utxos with larger amounts first
-  utxos.sort((a, b) => b.amount - a.amount);
+    const utxos = utxosDetails.utxos;
+    // Sort utxos with larger amounts first
+    utxos.sort((a, b) => b.amount - a.amount);
 
-  if (utxos[0].amount > sumOutputs) {
-    // If I have a single utxo capable of providing the full amount
-    // then I find the smallest utxos that can fill the full amount
+    if (utxos[0].amount > sumOutputs) {
+        // If I have a single utxo capable of providing the full amount
+        // then I find the smallest utxos that can fill the full amount
 
-    // This is the index of the first utxo that does not fill the full amount
-    // if this is -1, then all utxos fill the full amount and I should get the last one
-    const firstSmallerIndex = utxos.findIndex((obj) => obj.amount < sumOutputs);
+        // This is the index of the first utxo that does not fill the full amount
+        // if this is -1, then all utxos fill the full amount and I should get the last one
+        const firstSmallerIndex = utxos.findIndex((obj) => obj.amount < sumOutputs);
 
-    if (firstSmallerIndex === -1) {
-      // Return the last element of the array (the one with smaller amount)
-      return [utxos.pop()];
+        if (firstSmallerIndex === -1) {
+            // Return the last element of the array (the one with smaller amount)
+            return [utxos.pop()];
+        } else {
+            // Return the element right before the first element that does not provide the full amount
+            return [utxos[firstSmallerIndex - 1]];
+        }
     } else {
-      // Return the element right before the first element that does not provide the full amount
-      return [utxos[firstSmallerIndex - 1]];
-    }
-  } else {
-    // Else I get the utxos in order until the full amount is filled
-    let total = 0;
-    const retUtxos = [];
-    for (const utxo of utxos) {
-      retUtxos.push(utxo);
-      total += utxo.amount;
+        // Else I get the utxos in order until the full amount is filled
+        let total = 0;
+        const retUtxos = [];
+        for (const utxo of utxos) {
+            retUtxos.push(utxo);
+            total += utxo.amount;
 
-      if (total >= sumOutputs) {
-        return retUtxos;
-      }
+            if (total >= sumOutputs) {
+                return retUtxos;
+            }
+        }
     }
-  }
 }
 
 /**
@@ -576,317 +669,320 @@ const getUtxosToFillTx = (wallet, sumOutputs, options) => {
  * To achieve this validation we must create a custom validator.
  */
 walletRouter.post('/send-tx',
-  checkSchema({
-    outputs: {
-      in: ['body'],
-      isArray: true,
-    },
-    'outputs.*.address': {
-      in: ['body'],
-      isString: true,
-    },
-    'outputs.*.value': {
-      in: ['body'],
-      isInt: {
-        options: {
-          min: 1
-        }
-      },
-      toInt: true
-    },
-    'outputs.*.token': {
-      in: ['body'],
-      isString: true,
-      optional: true
-    },
-    inputs: {
-      in: ['body'],
-      isArray: true,
-      optional: true,
-    },
-    'inputs.*': {
-      in: ['body'],
-      isObject: true,
-      custom: {
-        options: (value, { req, location, path }) => {
-          if ('type' in value && value.type === 'query') {
-            // It's a query input and all fields are optionals
-            return true;
-          } else {
-            // It's a normal input
-            if (!('hash' in value) || !(typeof value.hash === 'string')) {
-              return false;
+    checkSchema({
+        outputs: {
+            in: ['body'],
+            isArray: true,
+        },
+        'outputs.*.address': {
+            in: ['body'],
+            isString: true,
+        },
+        'outputs.*.value': {
+            in: ['body'],
+            isInt: {
+                options: {
+                    min: 1
+                }
+            },
+            toInt: true
+        },
+        'outputs.*.token': {
+            in: ['body'],
+            isString: true,
+            optional: true
+        },
+        inputs: {
+            in: ['body'],
+            isArray: true,
+            optional: true,
+        },
+        'inputs.*': {
+            in: ['body'],
+            isObject: true,
+            custom: {
+                options: (value, {req, location, path}) => {
+                    if ('type' in value && value.type === 'query') {
+                        // It's a query input and all fields are optionals
+                        return true;
+                    } else {
+                        // It's a normal input
+                        if (!('hash' in value) || !(typeof value.hash === 'string')) {
+                            return false;
+                        }
+                        if (!('index' in value) || !(/^\d+$/.test(value.index))) {
+                            // Test that index is required and it's an integer
+                            return false;
+                        }
+                        if (!value.hash) {
+                            // the regex in value.index already test for empty string
+                            return false;
+                        }
+                        return true;
+                    }
+                }
+            },
+            customSanitizer: {
+                options: (value) => {
+                    const sanitizedValue = Object.assign({}, value, {index: parseInt(value.index)});
+                    return sanitizedValue;
+                }
             }
-            if (!('index' in value) || !(/^\d+$/.test(value.index))) {
-              // Test that index is required and it's an integer
-              return false;
+        },
+        token: {
+            in: ['body'],
+            isObject: true,
+            optional: true,
+            custom: {
+                options: (value, {req, location, path}) => {
+                    if (!('name' in value) || !(typeof value.name === 'string')) {
+                        return false;
+                    }
+                    if (!('uid' in value) || !(typeof value.uid === 'string')) {
+                        return false;
+                    }
+                    if (!('symbol' in value) || !(typeof value.symbol === 'string')) {
+                        return false;
+                    }
+                    if (!value.name || !value.uid || !value.symbol) {
+                        return false;
+                    }
+                    return true;
+                }
             }
-            if (!value.hash) {
-              // the regex in value.index already test for empty string
-              return false;
+        },
+        'change_address': {
+            in: ['body'],
+            isString: true,
+            optional: true
+        },
+        debug: {
+            in: ['body'],
+            isBoolean: true,
+            toBoolean: true,
+            optional: true,
+        }
+    }),
+    async (req, res) => {
+        const validationResult = parametersValidation(req);
+        if (!validationResult.success) {
+            return res.status(400).json(validationResult);
+        }
+
+        const canStart = lock.lock(lockTypes.SEND_TX);
+        if (!canStart) {
+            res.send({success: false, error: cantSendTxErrorMessage});
+            return;
+        }
+
+        const wallet = req.wallet;
+        const outputs = req.body.outputs;
+
+        // I tried to use the default schema with express validator to set the default token as HTR
+        // but apparently is not possible https://github.com/express-validator/express-validator/issues/682
+        for (const output of outputs) {
+            // If sent the new token parameter inside output, we use it
+            // otherwise we try to get from old parameter in token object
+            // if none exist we use default as HTR
+            if (!output.token) {
+                const tokenObj = req.body.token || wallet.tokenUid || hathorLibConstants.HATHOR_TOKEN_CONFIG;
+                output.token = tokenObj.uid;
             }
-            return true;
-          }
         }
-      },
-      customSanitizer: {
-        options: (value) => {
-          const sanitizedValue = Object.assign({}, value, {index: parseInt(value.index)});
-          return sanitizedValue;
+
+        // Expects array of objects with {'hash', 'index'}
+        let inputs = req.body.inputs || [];
+        const changeAddress = req.body.change_address || null;
+        const debug = req.body.debug || false;
+        if (debug) {
+            wallet.enableDebugMode();
         }
-      }
-    },
-    token: {
-      in: ['body'],
-      isObject: true,
-      optional: true,
-      custom: {
-        options: (value, { req, location, path }) => {
-          if (!('name' in value) || !(typeof value.name === 'string')) {
-            return false;
-          }
-          if (!('uid' in value) || !(typeof value.uid === 'string')) {
-            return false;
-          }
-          if (!('symbol' in value) || !(typeof value.symbol === 'string')) {
-            return false;
-          }
-          if (!value.name || !value.uid || !value.symbol) {
-            return false;
-          }
-          return true;
+
+        if (inputs.length > 0) {
+            if (inputs[0].type === 'query') {
+                // First get sum of all outputs
+                const sumOutputs = outputs.reduce((acc, obj) => obj.value + acc, 0);
+                const utxos = getUtxosToFillTx(wallet, sumOutputs, inputs[0]);
+                if (!utxos) {
+                    const response = {
+                        success: false,
+                        error: 'No utxos available for the query filter for this amount.'
+                    };
+                    res.send(response);
+                    lock.unlock(lockTypes.SEND_TX);
+                    return;
+                }
+                inputs = utxos.map((utxo) => {
+                    return {txId: utxo.tx_id, index: utxo.index};
+                });
+            } else {
+                // The new lib version expects input to have tx_id and not hash
+                inputs = inputs.map((input) => {
+                    return {txId: input.hash, index: input.index};
+                });
+            }
         }
-      }
-    },
-    'change_address': {
-      in: ['body'],
-      isString: true,
-      optional: true
-    },
-    debug: {
-      in: ['body'],
-      isBoolean: true,
-      toBoolean: true,
-      optional: true,
-    }
-  }),
-  async (req, res) => {
-  const validationResult = parametersValidation(req);
-  if (!validationResult.success) {
-    return res.status(400).json(validationResult);
-  }
 
-  const canStart = lock.lock(lockTypes.SEND_TX);
-  if (!canStart) {
-    res.send({success: false, error: cantSendTxErrorMessage});
-    return;
-  }
-
-  const wallet = req.wallet;
-  const outputs = req.body.outputs;
-
-  // I tried to use the default schema with express validator to set the default token as HTR
-  // but apparently is not possible https://github.com/express-validator/express-validator/issues/682
-  for (const output of outputs) {
-    // If sent the new token parameter inside output, we use it
-    // otherwise we try to get from old parameter in token object
-    // if none exist we use default as HTR
-    if (!output.token) {
-      const tokenObj = req.body.token || wallet.tokenUid || hathorLibConstants.HATHOR_TOKEN_CONFIG;
-      output.token = tokenObj.uid;
-    }
-  }
-
-  // Expects array of objects with {'hash', 'index'}
-  let inputs = req.body.inputs || [];
-  const changeAddress = req.body.change_address || null;
-  const debug = req.body.debug || false;
-  if (debug) {
-    wallet.enableDebugMode();
-  }
-
-  if (inputs.length > 0) {
-    if (inputs[0].type === 'query') {
-      // First get sum of all outputs
-      const sumOutputs = outputs.reduce((acc, obj) => obj.value + acc, 0);
-      const utxos = getUtxosToFillTx(wallet, sumOutputs, inputs[0]);
-      if (!utxos) {
-        const response = {success: false, error: 'No utxos available for the query filter for this amount.'};
-        res.send(response);
-        lock.unlock(lockTypes.SEND_TX);
-        return;
-      }
-      inputs = utxos.map((utxo) => {
-        return {txId: utxo.tx_id, index: utxo.index};
-      });
-    } else {
-      // The new lib version expects input to have tx_id and not hash
-      inputs = inputs.map((input) => {
-        return {txId: input.hash, index: input.index};
-      });
-    }
-  }
-
-  try {
-    const response = await wallet.sendManyOutputsTransaction(outputs, { inputs, changeAddress });
-    res.send({ success: true, ...mapTxReturn(response) });
-  } catch (err) {
-    const ret = {success: false, error: err.message };
-    if (debug) {
-      logger.debug('/send-tx failed', {
-        body: req.body,
-        response: ret,
-      });
-    }
-    res.send(ret);
-  } finally {
-    if (debug) {
-      wallet.disableDebugMode();
-    }
-    lock.unlock(lockTypes.SEND_TX);
-  }
-});
+        try {
+            const response = await wallet.sendManyOutputsTransaction(outputs, {inputs, changeAddress});
+            res.send({success: true, ...mapTxReturn(response)});
+        } catch (err) {
+            const ret = {success: false, error: err.message};
+            if (debug) {
+                logger.debug('/send-tx failed', {
+                    body: req.body,
+                    response: ret,
+                });
+            }
+            res.send(ret);
+        } finally {
+            if (debug) {
+                wallet.disableDebugMode();
+            }
+            lock.unlock(lockTypes.SEND_TX);
+        }
+    });
 
 /**
  * POST request to create a token
  * For the docs, see api-docs.js
  */
 walletRouter.post('/create-token',
-  body('name').isString(),
-  body('symbol').isString(),
-  body('amount').isInt({ min: 1 }).toInt(),
-  body('address').isString().optional(),
-  body('change_address').isString().optional(),
-  async (req, res) => {
-  const validationResult = parametersValidation(req);
-  if (!validationResult.success) {
-    return res.status(400).json(validationResult);
-  }
+    body('name').isString(),
+    body('symbol').isString(),
+    body('amount').isInt({min: 1}).toInt(),
+    body('address').isString().optional(),
+    body('change_address').isString().optional(),
+    async (req, res) => {
+        const validationResult = parametersValidation(req);
+        if (!validationResult.success) {
+            return res.status(400).json(validationResult);
+        }
 
-  const canStart = lock.lock(lockTypes.SEND_TX);
-  if (!canStart) {
-    res.send({success: false, error: cantSendTxErrorMessage});
-    return;
-  }
+        const canStart = lock.lock(lockTypes.SEND_TX);
+        if (!canStart) {
+            res.send({success: false, error: cantSendTxErrorMessage});
+            return;
+        }
 
-  const wallet = req.wallet;
-  const name = req.body.name;
-  const symbol = req.body.symbol;
-  const amount = req.body.amount;
-  const address = req.body.address || null;
-  const changeAddress = req.body.change_address || null;
-  try {
-    const response = await wallet.createNewToken(name, symbol, amount, { changeAddress, address });
-    res.send({ success: true, ...mapTxReturn(response) });
-  } catch (err) {
-    res.send({success: false, error: err.message });
-  } finally {
-    lock.unlock(lockTypes.SEND_TX);
-  }
-});
+        const wallet = req.wallet;
+        const name = req.body.name;
+        const symbol = req.body.symbol;
+        const amount = req.body.amount;
+        const address = req.body.address || null;
+        const changeAddress = req.body.change_address || null;
+        try {
+            const response = await wallet.createNewToken(name, symbol, amount, {changeAddress, address});
+            res.send({success: true, ...mapTxReturn(response)});
+        } catch (err) {
+            res.send({success: false, error: err.message});
+        } finally {
+            lock.unlock(lockTypes.SEND_TX);
+        }
+    });
 
 /**
  * POST request to mint tokens
  * For the docs, see api-docs.js
  */
 walletRouter.post('/mint-tokens',
-  body('token').isString(),
-  body('amount').isInt({ min: 1 }).toInt(),
-  body('address').isString().optional(),
-  body('change_address').isString().optional(),
-  async (req, res) => {
-  const validationResult = parametersValidation(req);
-  if (!validationResult.success) {
-    return res.status(400).json(validationResult);
-  }
+    body('token').isString(),
+    body('amount').isInt({min: 1}).toInt(),
+    body('address').isString().optional(),
+    body('change_address').isString().optional(),
+    async (req, res) => {
+        const validationResult = parametersValidation(req);
+        if (!validationResult.success) {
+            return res.status(400).json(validationResult);
+        }
 
-  const canStart = lock.lock(lockTypes.SEND_TX);
-  if (!canStart) {
-    res.send({success: false, error: cantSendTxErrorMessage});
-    return;
-  }
+        const canStart = lock.lock(lockTypes.SEND_TX);
+        if (!canStart) {
+            res.send({success: false, error: cantSendTxErrorMessage});
+            return;
+        }
 
-  const wallet = req.wallet;
-  const token = req.body.token || wallet.tokenUid;
-  const amount = req.body.amount;
-  const address = req.body.address || null;
-  const changeAddress = req.body.change_address || null;
-  try {
-    const response = await wallet.mintTokens(token, amount, { address, changeAddress });
-    res.send({ success: true, ...mapTxReturn(response) });
-  } catch (err) {
-    res.send({success: false, error: err.message });
-  } finally {
-    lock.unlock(lockTypes.SEND_TX);
-  }
-});
+        const wallet = req.wallet;
+        const token = req.body.token || wallet.tokenUid;
+        const amount = req.body.amount;
+        const address = req.body.address || null;
+        const changeAddress = req.body.change_address || null;
+        try {
+            const response = await wallet.mintTokens(token, amount, {address, changeAddress});
+            res.send({success: true, ...mapTxReturn(response)});
+        } catch (err) {
+            res.send({success: false, error: err.message});
+        } finally {
+            lock.unlock(lockTypes.SEND_TX);
+        }
+    });
 
 /**
  * POST request to melt tokens
  * For the docs, see api-docs.js
  */
 walletRouter.post('/melt-tokens',
-  body('token').isString(),
-  body('amount').isInt({ min: 1 }).toInt(),
-  body('change_address').isString().optional(),
-  body('deposit_address').isString().optional(),
-  async (req, res) => {
-  const validationResult = parametersValidation(req);
-  if (!validationResult.success) {
-    return res.status(400).json(validationResult);
-  }
+    body('token').isString(),
+    body('amount').isInt({min: 1}).toInt(),
+    body('change_address').isString().optional(),
+    body('deposit_address').isString().optional(),
+    async (req, res) => {
+        const validationResult = parametersValidation(req);
+        if (!validationResult.success) {
+            return res.status(400).json(validationResult);
+        }
 
-  const canStart = lock.lock(lockTypes.SEND_TX);
-  if (!canStart) {
-    res.send({success: false, error: cantSendTxErrorMessage});
-    return;
-  }
+        const canStart = lock.lock(lockTypes.SEND_TX);
+        if (!canStart) {
+            res.send({success: false, error: cantSendTxErrorMessage});
+            return;
+        }
 
-  const wallet = req.wallet;
-  const token = req.body.token || wallet.tokenUid;
-  const amount = req.body.amount;
-  const changeAddress = req.body.change_address || null;
-  const depositAddress = req.body.deposit_address || null;
-  try {
-    const response = await wallet.meltTokens(token, amount, { address: depositAddress, changeAddress });
-    res.send({ success: true, ...mapTxReturn(response) });
-  } catch (err) {
-    res.send({success: false, error: err.message });
-  } finally {
-    lock.unlock(lockTypes.SEND_TX);
-  }
-});
+        const wallet = req.wallet;
+        const token = req.body.token || wallet.tokenUid;
+        const amount = req.body.amount;
+        const changeAddress = req.body.change_address || null;
+        const depositAddress = req.body.deposit_address || null;
+        try {
+            const response = await wallet.meltTokens(token, amount, {address: depositAddress, changeAddress});
+            res.send({success: true, ...mapTxReturn(response)});
+        } catch (err) {
+            res.send({success: false, error: err.message});
+        } finally {
+            lock.unlock(lockTypes.SEND_TX);
+        }
+    });
 
 /**
  * GET request to filter utxos before consolidation
  * For the docs, see api-docs.js
  */
 walletRouter.get(
-  '/utxo-filter',
-  query('max_utxos').isInt().optional().toInt(),
-  query('token').isString().optional(),
-  query('filter_address').isString().optional(),
-  query('amount_smaller_than').isInt().optional().toInt(),
-  query('amount_bigger_than').isInt().optional().toInt(),
-  query('maximum_amount').isInt().optional().toInt(),
-  query('only_available').isBoolean().optional().toBoolean(),
-  (req, res) => {
-    try {
-      const validationResult = parametersValidation(req);
-      if (!validationResult.success) {
-        return res.status(400).json(validationResult);
-      }
+    '/utxo-filter',
+    query('max_utxos').isInt().optional().toInt(),
+    query('token').isString().optional(),
+    query('filter_address').isString().optional(),
+    query('amount_smaller_than').isInt().optional().toInt(),
+    query('amount_bigger_than').isInt().optional().toInt(),
+    query('maximum_amount').isInt().optional().toInt(),
+    query('only_available').isBoolean().optional().toBoolean(),
+    (req, res) => {
+        try {
+            const validationResult = parametersValidation(req);
+            if (!validationResult.success) {
+                return res.status(400).json(validationResult);
+            }
 
-      const wallet = req.wallet;
-      const options = matchedData(req, { locations: ['query'] });
-      // TODO Memory usage enhancements are required here as wallet.getUtxos can cause issues on wallets with a huge amount of utxos.
-      // TODO Add pagination
-      const ret = wallet.getUtxos(options);
-      res.send(ret);
-    } catch(error) {
-      res.send({ success: false, error: error.message || error });
+            const wallet = req.wallet;
+            const options = matchedData(req, {locations: ['query']});
+            // TODO Memory usage enhancements are required here as wallet.getUtxos can cause issues on wallets with a huge amount of utxos.
+            // TODO Add pagination
+            const ret = wallet.getUtxos(options);
+            res.send(ret);
+        } catch (error) {
+            res.send({success: false, error: error.message || error});
+        }
     }
-  }
 );
 
 /**
@@ -894,72 +990,72 @@ walletRouter.get(
  * For the docs, see api-docs.js
  */
 walletRouter.post(
-  '/utxo-consolidation',
-  body('destination_address').isString(),
-  body('max_utxos').isInt().optional().toInt(),
-  body('token').isString().optional(),
-  body('filter_address').isString().optional(),
-  body('amount_smaller_than').isInt().optional().toInt(),
-  body('amount_bigger_than').isInt().optional().toInt(),
-  body('maximum_amount').isInt().optional().toInt(),
-  async (req, res) => {
-    // Body parameters validation
-    const validationResult = parametersValidation(req);
-    if (!validationResult.success) {
-      return res.status(400).json(validationResult);
-    }
+    '/utxo-consolidation',
+    body('destination_address').isString(),
+    body('max_utxos').isInt().optional().toInt(),
+    body('token').isString().optional(),
+    body('filter_address').isString().optional(),
+    body('amount_smaller_than').isInt().optional().toInt(),
+    body('amount_bigger_than').isInt().optional().toInt(),
+    body('maximum_amount').isInt().optional().toInt(),
+    async (req, res) => {
+        // Body parameters validation
+        const validationResult = parametersValidation(req);
+        if (!validationResult.success) {
+            return res.status(400).json(validationResult);
+        }
 
-    const canStart = lock.lock(lockTypes.SEND_TX);
-    if (!canStart) {
-      res.send({success: false, error: cantSendTxErrorMessage});
-      return;
-    }
+        const canStart = lock.lock(lockTypes.SEND_TX);
+        if (!canStart) {
+            res.send({success: false, error: cantSendTxErrorMessage});
+            return;
+        }
 
-    const wallet = req.wallet;
-    const { destination_address, ...options } = matchedData(req, { locations: ['body'] });
+        const wallet = req.wallet;
+        const {destination_address, ...options} = matchedData(req, {locations: ['body']});
 
-    try {
-      const response = await wallet.consolidateUtxos(destination_address, options);
-      res.send({ success: true, ...response });
-    } catch (err) {
-      res.send({success: false, error: err.message });
-    } finally {
-      lock.unlock(lockTypes.SEND_TX);
+        try {
+            const response = await wallet.consolidateUtxos(destination_address, options);
+            res.send({success: true, ...response});
+        } catch (err) {
+            res.send({success: false, error: err.message});
+        } finally {
+            lock.unlock(lockTypes.SEND_TX);
+        }
     }
-  }
 );
 
 /**
  * GET request to obtain adress information
  * For the docs, see api-docs.js
  */
- walletRouter.get(
-  '/address-info',
-  query('address').isString(),
-  query('token').isString().optional(),
-  (req, res) => {
-    // Query parameters validation
-    const validationResult = parametersValidation(req);
-    if (!validationResult.success) {
-      return res.status(400).json(validationResult);
-    }
+walletRouter.get(
+    '/address-info',
+    query('address').isString(),
+    query('token').isString().optional(),
+    (req, res) => {
+        // Query parameters validation
+        const validationResult = parametersValidation(req);
+        if (!validationResult.success) {
+            return res.status(400).json(validationResult);
+        }
 
-    const wallet = req.wallet;
-    const { address, token } = matchedData(req, { locations: ['query'] });
-    try {
-      const result = wallet.getAddressInfo(address, { token });
-      res.send({
-        success: true,
-        ...result
-      });
-    } catch(error) {
-      if (error instanceof errors.AddressError) {
-        res.send({ success: false, error: error.message });
-      } else {
-        throw error;
-      }
+        const wallet = req.wallet;
+        const {address, token} = matchedData(req, {locations: ['query']});
+        try {
+            const result = wallet.getAddressInfo(address, {token});
+            res.send({
+                success: true,
+                ...result
+            });
+        } catch (error) {
+            if (error instanceof errors.AddressError) {
+                res.send({success: false, error: error.message});
+            } else {
+                throw error;
+            }
+        }
     }
-  }
 );
 
 /**
@@ -967,86 +1063,91 @@ walletRouter.post(
  * For the docs, see api-docs.js
  */
 walletRouter.post('/create-nft',
-  body('name').isString(),
-  body('symbol').isString(),
-  body('amount').isInt({ min: 1 }).toInt(),
-  body('data').isString(),
-  body('address').isString().optional(),
-  body('change_address').isString().optional(),
-  body('create_mint').isBoolean().optional().toBoolean(),
-  body('create_melt').isBoolean().optional().toBoolean(),
-  async (req, res) => {
-  const validationResult = parametersValidation(req);
-  if (!validationResult.success) {
-    return res.status(400).json(validationResult);
-  }
+    body('name').isString(),
+    body('symbol').isString(),
+    body('amount').isInt({min: 1}).toInt(),
+    body('data').isString(),
+    body('address').isString().optional(),
+    body('change_address').isString().optional(),
+    body('create_mint').isBoolean().optional().toBoolean(),
+    body('create_melt').isBoolean().optional().toBoolean(),
+    async (req, res) => {
+        const validationResult = parametersValidation(req);
+        if (!validationResult.success) {
+            return res.status(400).json(validationResult);
+        }
 
-  const canStart = lock.lock(lockTypes.SEND_TX);
-  if (!canStart) {
-    res.send({success: false, error: cantSendTxErrorMessage});
-    return;
-  }
+        const canStart = lock.lock(lockTypes.SEND_TX);
+        if (!canStart) {
+            res.send({success: false, error: cantSendTxErrorMessage});
+            return;
+        }
 
-  const wallet = req.wallet;
-  const name = req.body.name;
-  const symbol = req.body.symbol;
-  const amount = req.body.amount;
-  const data = req.body.data;
-  const address = req.body.address || null;
-  const changeAddress = req.body.change_address || null;
-  const createMint = req.body.create_mint || false;
-  const createMelt = req.body.create_melt || false;
-  try {
-    const response = await wallet.createNFT(name, symbol, amount, data, { address, changeAddress, createMint, createMelt });
-    res.send({ success: true, ...mapTxReturn(response) });
-  } catch (err) {
-    res.send({success: false, error: err.message });
-  } finally {
-    lock.unlock(lockTypes.SEND_TX);
-  }
-});
+        const wallet = req.wallet;
+        const name = req.body.name;
+        const symbol = req.body.symbol;
+        const amount = req.body.amount;
+        const data = req.body.data;
+        const address = req.body.address || null;
+        const changeAddress = req.body.change_address || null;
+        const createMint = req.body.create_mint || false;
+        const createMelt = req.body.create_melt || false;
+        try {
+            const response = await wallet.createNFT(name, symbol, amount, data, {
+                address,
+                changeAddress,
+                createMint,
+                createMelt
+            });
+            res.send({success: true, ...mapTxReturn(response)});
+        } catch (err) {
+            res.send({success: false, error: err.message});
+        } finally {
+            lock.unlock(lockTypes.SEND_TX);
+        }
+    });
 
 /**
  * POST request to stop a wallet
  * For the docs, see api-docs.js
  */
 walletRouter.post('/stop', (req, res) => {
-  // Stop wallet and remove from wallets object
-  const wallet = req.wallet;
-  wallet.stop();
+    // Stop wallet and remove from wallets object
+    const wallet = req.wallet;
+    wallet.stop();
 
-  delete wallets[req.walletId];
-  res.send({success: true});
+    delete wallets[req.walletId];
+    res.send({success: true});
 });
 
 app.use('/wallet', walletRouter);
 
 console.log('Starting Hathor Wallet...', {
-  wallet: version,
-  version: process.version,
-  platform: process.platform,
-  pid: process.pid,
+    wallet: version,
+    version: process.version,
+    platform: process.platform,
+    pid: process.pid,
 });
 
 console.log('Configuration...', {
-  network: config.network,
-  server: config.server,
-  txMiningUrl: hathorLibConfig.getTxMiningUrl(),
-  tokenUid: config.tokenUid,
-  apiKey: config.http_api_key,
-  gapLimit: config.gapLimit,
-  connectionTimeout: config.connectionTimeout,
+    network: config.network,
+    server: config.server,
+    txMiningUrl: hathorLibConfig.getTxMiningUrl(),
+    tokenUid: config.tokenUid,
+    apiKey: config.http_api_key,
+    gapLimit: config.gapLimit,
+    connectionTimeout: config.connectionTimeout,
 });
 
 if (config.gapLimit) {
-  console.log(`Set GAP LIMIT to ${config.gapLimit}`);
-  oldWalletUtils.setGapLimit(config.gapLimit);
+    console.log(`Set GAP LIMIT to ${config.gapLimit}`);
+    oldWalletUtils.setGapLimit(config.gapLimit);
 }
 
 if (process.env.NODE_ENV !== 'test') {
-  app.listen(config.http_port, config.http_bind_address, () => {
-    console.log(`Listening on ${config.http_bind_address}:${config.http_port}...`);
-  });
+    app.listen(config.http_port, config.http_bind_address, () => {
+        console.log(`Listening on ${config.http_bind_address}:${config.http_port}...`);
+    });
 }
 
 export default app;
